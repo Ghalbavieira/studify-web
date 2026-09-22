@@ -6,7 +6,7 @@ import { useState } from "react";
 import { AppShell } from "../app-shell";
 import { buttonClass, inputClass, secondaryButtonClass } from "../study-ui";
 import { useSocial } from "@/lib/social-store";
-import { normalizeSearch, slugifyGroupName, type SocialMedia, type StudyGroup } from "@/lib/social";
+import { normalizeSearch, postKindLabels, slugifyGroupName, type PostKind, type SocialMedia, type StudyGroup } from "@/lib/social";
 import { MediaUpload } from "./media-upload";
 import { PostComposer } from "./post-composer";
 import { PostCard } from "./post-card";
@@ -122,13 +122,19 @@ export function SocialGroupPage({ slug }: { slug: string }) {
   const { data, me, update } = useSocial();
   const group = data.groups.find((item) => item.slug === slug);
   const [tab, setTab] = useState<"feed" | "members" | "rules">("feed");
+  const [postKind, setPostKind] = useState<"all" | PostKind>("all");
+  const [postQuery, setPostQuery] = useState("");
   const memberRecords = group ? data.groupMembers.filter((member) => member.groupId === group.id) : [];
   if (!group) return <AppShell><div className="mx-auto max-w-4xl"><Link href="/comunidade/grupos" className="text-sm text-accent">← Grupos</Link><h1 className="mt-8 text-2xl font-semibold">Grupo não encontrado.</h1></div></AppShell>;
   const groupId = group.id;
   const membership = memberRecords.find((member) => member.userId === me.id);
   const joined = Boolean(membership);
   const owner = membership?.role === "owner";
-  const posts = data.posts.filter((post) => post.groupId === groupId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const normalizedPostQuery = normalizeSearch(postQuery.trim());
+  const posts = data.posts.filter((post) => post.groupId === groupId)
+    .filter((post) => postKind === "all" || post.kind === postKind)
+    .filter((post) => !normalizedPostQuery || normalizeSearch([post.title, post.text, post.subject, post.topic].join(" ")).includes(normalizedPostQuery))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   function toggleMembership() {
     if (owner) return;
@@ -151,7 +157,7 @@ export function SocialGroupPage({ slug }: { slug: string }) {
     </header>
     <div role="tablist" className="flex border-b border-line">{[["feed", "Publicações"], ["members", "Membros"], ["rules", "Regras"]].map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} onClick={() => setTab(value as typeof tab)} className={`border-b-2 px-4 py-3 text-sm font-semibold ${tab === value ? "border-accent text-accent" : "border-transparent text-muted"}`}>{label}</button>)}</div>
 
-    {tab === "feed" && <section>{joined ? <PostComposer groupId={group.id} onPublish={(draft) => update((current) => ({ ...current, posts: [{ ...draft, id: crypto.randomUUID(), authorId: me.id, createdAt: new Date().toISOString() }, ...current.posts] }))} /> : <p className="border-b border-line py-5 text-sm text-muted">Entre no grupo para publicar. Você ainda pode acompanhar as publicações deste grupo público.</p>}{posts.map((post) => { const author = data.profiles.find((profile) => profile.id === post.authorId); return author && <PostCard key={post.id} post={post} author={author} />; })}{!posts.length && <p className="py-10 text-sm text-muted">Ainda não há publicações neste grupo.</p>}</section>}
+    {tab === "feed" && <section>{joined ? <PostComposer groupId={group.id} onPublish={(draft) => update((current) => ({ ...current, posts: [{ ...draft, id: crypto.randomUUID(), authorId: me.id, createdAt: new Date().toISOString() }, ...current.posts] }))} /> : <p className="border-b border-line py-5 text-sm text-muted">Entre no grupo para publicar. Você ainda pode acompanhar as publicações deste grupo público.</p>}<div className="grid gap-3 border-b border-line py-4 sm:grid-cols-[minmax(0,1fr)_auto]"><label className="text-sm text-muted"><span className="sr-only">Buscar no conteúdo do grupo</span><input type="search" value={postQuery} onChange={(event) => setPostQuery(event.target.value)} placeholder="Buscar por título ou conteúdo" className="w-full rounded-md border border-line bg-background-secondary px-4 py-2.5 text-sm text-foreground" /></label><div role="group" aria-label="Filtrar publicações por tipo" className="flex flex-wrap gap-2">{([['all', 'Todos'], ...Object.entries(postKindLabels)] as ["all" | PostKind, string][]).map(([value, label]) => <button key={value} type="button" aria-pressed={postKind === value} onClick={() => setPostKind(value)} className={`rounded-md border px-3 py-2 text-xs ${postKind === value ? "border-accent bg-accent-subtle text-accent" : "border-line text-muted"}`}>{label}{value !== "all" && "s"}</button>)}</div></div>{posts.map((post) => { const author = data.profiles.find((profile) => profile.id === post.authorId); return author && <PostCard key={post.id} post={post} author={author} />; })}{!posts.length && <p className="py-10 text-sm text-muted">Nenhuma publicação encontrada com esses filtros.</p>}</section>}
 
     {tab === "members" && <section className="py-6"><div className="space-y-4">{memberRecords.map((member) => { const profile = data.profiles.find((item) => item.id === member.userId); if (!profile) return null; return <Link key={`${member.groupId}-${member.userId}`} href={`/comunidade/${profile.username}`} className="flex items-center gap-3"><UserAvatar profile={profile} /><span className="text-sm font-semibold">{profile.name}<span className="block text-xs font-normal text-muted">@{profile.username} · {member.role === "owner" ? "Criador" : "Membro"}</span></span></Link>; })}</div></section>}
 

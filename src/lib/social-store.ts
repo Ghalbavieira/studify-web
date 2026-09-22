@@ -51,7 +51,7 @@ async function loadCloudData(userId: string, force = false) {
     const supabase = getSupabaseClient();
     const [profiles, posts, comments, follows, likes, reposts, bookmarks, groups, members] = await Promise.all([
       supabase.from("social_profiles").select("user_id,username,display_name,bio,objective,avatar_url,avatar_alt,subjects,studied_seconds"),
-      supabase.from("social_posts").select("id,user_id,text,media_url,media_alt,subject,topic,objective,metrics,group_id,created_at").order("created_at", { ascending: false }).limit(300),
+      supabase.from("social_posts").select("id,user_id,kind,title,text,media_url,media_alt,subject,topic,objective,metrics,group_id,created_at").order("created_at", { ascending: false }).limit(300),
       supabase.from("social_comments").select("id,post_id,user_id,text,media_url,media_alt,created_at").order("created_at", { ascending: true }).limit(1000),
       supabase.from("social_follows").select("follower_id,following_id,created_at").limit(3000),
       supabase.from("social_likes").select("user_id,post_id,created_at").limit(5000),
@@ -79,6 +79,8 @@ async function loadCloudData(userId: string, force = false) {
       posts: (posts.data ?? []).map((row) => ({
         id: row.id,
         authorId: row.user_id,
+        kind: row.kind,
+        title: row.title,
         text: row.text,
         media: media(row.media_url, row.media_alt),
         createdAt: row.created_at,
@@ -155,12 +157,16 @@ async function persistDiff(userId: string, before: SocialData, after: SocialData
     return {
       added: newItems.filter((item) => !oldMap.has(key(item))),
       removed: oldItems.filter((item) => !newMap.has(key(item))),
+      changed: newItems.filter((item) => oldMap.has(key(item)) && JSON.stringify(oldMap.get(key(item))) !== JSON.stringify(item)),
     };
   };
 
   const postDiff = diffCollection(before.posts, after.posts, (item) => item.id);
   for (const post of postDiff.added.filter((item) => item.authorId === userId)) {
-    operations.push(supabase.from("social_posts").insert({ id: post.id, user_id: userId, text: post.text, media_url: post.media?.url ?? null, media_alt: post.media?.alt ?? null, subject: post.subject, topic: post.topic, objective: post.objective, metrics: post.metrics, group_id: post.groupId }).then(({ error }) => { if (error) throw error; }));
+    operations.push(supabase.from("social_posts").insert({ id: post.id, user_id: userId, kind: post.kind, title: post.title, text: post.text, media_url: post.media?.url ?? null, media_alt: post.media?.alt ?? null, subject: post.subject, topic: post.topic, objective: post.objective, metrics: post.metrics, group_id: post.groupId }).then(({ error }) => { if (error) throw error; }));
+  }
+  for (const post of postDiff.changed.filter((item) => item.authorId === userId)) {
+    operations.push(supabase.from("social_posts").update({ kind: post.kind, title: post.title, text: post.text, subject: post.subject, topic: post.topic }).eq("id", post.id).eq("user_id", userId).then(({ error }) => { if (error) throw error; }));
   }
   for (const post of postDiff.removed.filter((item) => item.authorId === userId)) {
     operations.push(supabase.from("social_posts").delete().eq("id", post.id).then(({ error }) => { if (error) throw error; }));

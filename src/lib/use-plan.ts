@@ -2,9 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { useStudyData } from "@/lib/study-store";
-export type Capability = "canCreateMultipleGoals" | "canUseFullHistory" | "canUseAdvancedAnalytics" | "canUseAdvancedAI" | "canUseAdvancedExamImport" | "canUseAdvancedPlanning" | "canUseFullReports" | "canUseTimer" | "canUseCommunity";
+import { FREE_CAPABILITIES, mergeCapabilities, type Capability } from "@/lib/entitlements";
+export type { Capability } from "@/lib/entitlements";
 export type PlanState = { plan: "free" | "pro"; status: "free" | "active" | "trialing"; loading: boolean; error?: string; trialDaysRemaining: number; billingStatus?: string; expiresAt?: string | null; capabilities: Partial<Record<Capability, boolean>> };
-const initial: PlanState = { plan: "free", status: "free", loading: true, trialDaysRemaining: 0, capabilities: {} };
+const initial: PlanState = { plan: "free", status: "free", loading: true, trialDaysRemaining: 0, capabilities: FREE_CAPABILITIES };
 export function usePlan() {
   const { mode, userId } = useStudyData();
   const [state, setState] = useState<PlanState>(initial);
@@ -15,7 +16,7 @@ export function usePlan() {
     try {
       const { data, error } = await getSupabaseClient().rpc("get_entitlement");
       if (error || data?.version !== 1 || !data.capabilities || !["free", "pro"].includes(data.plan)) throw error ?? new Error("Plano indisponível");
-      if (version === generation.current) setState({ ...data, loading: false });
+      if (version === generation.current) setState({ ...data, capabilities: mergeCapabilities(data.capabilities), loading: false });
     } catch { if (version === generation.current) setState({ ...initial, loading: false, error: "Não foi possível consultar seu plano. Tente atualizar." }); }
   }, [mode, userId]);
   useEffect(() => { const ref = generation;
