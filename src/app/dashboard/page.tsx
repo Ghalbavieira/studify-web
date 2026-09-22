@@ -1,36 +1,158 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Check, Circle, Play } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
-import { EmptyState, timeLabel } from "@/components/study-ui";
-import { useStudyData } from "@/lib/study-store";
-import { useActiveStudy } from "@/lib/active-study";
+import { refreshStudyData, useStudyData } from "@/lib/study-store";
+import { elapsedStudy, saveActiveStudy, useActiveStudy } from "@/lib/active-study";
 import { buildPriorityContext, calculateDailyMetrics, calculateMetrics } from "@/lib/priority-engine";
+import { localDate, type PlanBlock } from "@/lib/study-data";
 
-export default function HojePage() {
-  const { data } = useStudyData();
+const cardClass = "min-w-0 rounded-lg border border-line bg-surface p-4";
+const textClass = "text-sm leading-[22px] text-secondary";
+const actionClass = "flex min-h-12 w-full items-center justify-center rounded-lg px-[18px] text-center text-[15px] font-extrabold text-foreground disabled:cursor-not-allowed disabled:opacity-50";
+const ghostClass = `${actionClass} bg-raised`;
+
+function formatMinutes(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}min` : `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}min`;
+}
+
+function formatClock(seconds: number) {
+  const safe = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = String(Math.floor((safe % 3600) / 60)).padStart(2, "0");
+  const rest = String(safe % 60).padStart(2, "0");
+  return hours ? `${String(hours).padStart(2, "0")}:${minutes}:${rest}` : `${minutes}:${rest}`;
+}
+
+export default function HomePage() {
+  const { data, ready, userId, mode } = useStudyData();
   const active = useActiveStudy();
-  const now = new Date();
-  const week = calculateMetrics(data, now);
+  const router = useRouter();
+  const [now, setNow] = useState(() => new Date());
+  const [feedback, setFeedback] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), active ? 1000 : 60_000);
+    return () => clearInterval(timer);
+  }, [active]);
+
+  const today = localDate(now);
+  const daily = calculateDailyMetrics(data, now);
+  const weekly = calculateMetrics(data, now);
+  const priority = buildPriorityContext(data, now);
+  const blocks = data.blocks.filter(block => block.date === today);
+  // Match HomeScreen in Studify Mobile: today's first pending block, or its last completed block.
+  const block = blocks.find(block => !block.done) ?? blocks.at(-1);
+  const subject = data.subjects.find(subject => subject.id === block?.subjectId);
+  const topic = data.topics.find(topic => topic.id === block?.topicId);
+  const due = data.tasks.filter(task => !task.completedAt && task.dueDate <= today);
+  const latest = new Map<string, boolean>();
+  for (const attempt of [...data.attempts].sort((a, b) => a.answeredAt.localeCompare(b.answeredAt))) {
+    latest.set(attempt.questionId, attempt.isCorrect);
+  }
   const greeting = now.getHours() < 12 ? "Bom dia" : now.getHours() < 18 ? "Boa tarde" : "Boa noite";
-  const day = calculateDailyMetrics(data, now);
-  const context = buildPriorityContext(data, now);
-  const recommendation = context.recommendation;
-  const activeSubject = data.subjects.find((subject) => subject.id === active?.subjectId);
-  const due = data.tasks.filter((task) => !task.completedAt && task.dueDate <= day.today).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
-  const todayBlocks = data.blocks.filter((block) => block.date === day.today || (block.date < day.today && !block.done));
-  const next = recommendation?.nextBlock;
-  const nextUrl = active ? "/estudos" : next ? `${next.kind === "questions" ? "/questoes" : "/estudos"}?subject=${next.subjectId}${next.topicId ? `&topic=${next.topicId}` : ""}${next.blockId ? `&block=${next.blockId}` : ""}${next.taskId ? `&task=${next.taskId}` : ""}` : "/plano";
-  const progress = day.executionRate === null ? 0 : Math.min(100, day.executionRate * 100);
-  return <AppShell><div className="mx-auto max-w-5xl"><header className="border-b border-line pb-5"><p className="text-sm capitalize text-muted">{now.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" })}</p><h1 className="mt-2 text-3xl font-semibold sm:text-4xl">{greeting}{data.profileName ? `, ${data.profileName.split(" ")[0]}` : ""}.</h1><p className="mt-3 text-secondary">{data.goal?.title}</p>{context.daysToExam !== null && <p className="mt-1 text-sm text-accent">{context.daysToExam > 0 ? `Faltam ${context.daysToExam} dias para sua prova.` : context.daysToExam === 0 ? "Sua prova é hoje." : "Atualize a data da sua próxima prova."}</p>}<div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted"><span>{day.completedBlocks} de {day.totalBlocks} blocos concluídos</span><span>{timeLabel(day.executedSeconds)} de {timeLabel(day.plannedSeconds)} planejados</span><div className="h-1 w-32 rounded-sm bg-raised" role="progressbar" aria-label="Tempo executado do plano de hoje" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)}><div className="h-1 rounded-sm bg-success" style={{ width: `${progress}%` }} /></div></div></header>
-    {!data.goal ? <div className="py-8"><EmptyState title="Dê uma direção ao seu estudo" description="Defina seu objetivo, a data da prova e as matérias. As prioridades serão calculadas a partir do que você registrar." href="/cadastro" action="Criar meu objetivo" /></div> : !data.subjects.length ? <div className="py-8"><EmptyState title={data.goal.title} description="Adicione as matérias e seus pesos para montar a primeira semana." href="/materias" action="Adicionar matérias" /></div> : <>
-      <section aria-labelledby="next-study" className="border-b border-line py-7 sm:py-9"><p className="text-xs font-medium uppercase tracking-[.16em] text-accent">{active ? "Bloco em andamento" : "Foco de hoje"}</p><div className="mt-3 flex flex-wrap items-end justify-between gap-5"><div><h2 id="next-study" className="text-3xl font-semibold">{activeSubject?.name ?? recommendation?.subject}</h2><p className="mt-2 text-lg text-secondary">{active ? data.topics.find((topic) => topic.id === active.topicId)?.title ?? "Sua sessão está pronta para continuar." : next?.topic ?? "Avance no próximo conteúdo"}</p><p className="mt-3 text-sm text-muted">{active ? `${active.durationSeconds / 60} min · sessão iniciada` : `${next?.kind === "recall" ? "Recall" : next?.kind === "review" ? "Revisão" : next?.kind === "questions" ? "Questões" : "Estudo"} · ${next?.minutes} min sugeridos`}</p></div><Link href={nextUrl} className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 font-semibold"><Play size={17} />{active ? "Continuar" : "Começar"}</Link></div><div className="mt-6 max-w-3xl border-l-2 border-highlight/50 pl-4"><h3 className="text-xs font-medium text-highlight">Por que estudar agora</h3><p className="mt-2 text-sm leading-6 text-secondary">{active ? "Conclua e registre este bloco antes de escolher o próximo estudo." : recommendation?.reasons.filter((reason) => !reason.startsWith("Ainda sem questões")).slice(0, 3).join(" ")}</p><Link href="/ia" className="mt-2 inline-block text-xs text-accent">Ver critérios e prioridades →</Link></div></section>
-      <section className="border-b border-line py-6"><div className="flex items-center justify-between gap-3"><h2 className="text-xl font-semibold">Plano de hoje</h2><Link href="/plano" className="text-sm text-accent">Organizar semana</Link></div>{!todayBlocks.length ? <div className="mt-4 flex flex-wrap gap-4 text-sm"><Link href="/plano" className="text-accent">Criar bloco →</Link><Link href="/estudos" className="text-accent">Estudar sem planejamento →</Link></div> : <ol className="mt-4 divide-y divide-line">{todayBlocks.map((block, index) => { const subject = data.subjects.find((subject) => subject.id === block.subjectId); const current = active?.blockId === block.id; const late = !block.done && block.date < day.today; const status = block.done ? "Concluído" : current ? "Atual" : late ? "Atrasado" : "Pendente"; return <li key={block.id} className="flex items-start gap-3 py-4"><span className={`mt-1 ${block.done ? "text-success" : current ? "text-accent" : "text-muted"}`}>{block.done ? <Check size={17} /> : <Circle size={17} />}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold"><span className="mr-2 font-mono text-xs text-muted">{String(index + 1).padStart(2, "0")}</span>{subject?.name}</h3><span className={`text-xs ${late ? "text-attention" : block.done ? "text-success" : "text-muted"}`}>{status} · {block.minutes} min</span></div><p className="mt-1 text-sm text-muted">{data.topics.find((topic) => topic.id === block.topicId)?.title ?? (block.description || "Bloco de estudo")}</p>{<Link href={block.sessionType === "questions" ? `/questoes?subject=${block.subjectId}&block=${block.id}` : `/estudos?block=${block.id}`} className="mt-2 inline-flex items-center gap-1 text-xs text-accent">{block.done ? "Refazer bloco" : current ? "Retomar" : "Estudar este bloco"}<ArrowRight size={13} /></Link>}</div></li>; })}</ol>}</section>
-      <section className="border-b border-line py-6"><h2 className="text-xl font-semibold">Revisões e recalls</h2>{!due.length ? <p className="mt-3 text-sm text-muted">Nenhuma pendência para hoje. As próximas revisões serão programadas a partir das sessões registradas.</p> : <ul className="mt-3 divide-y divide-line">{due.map((task) => <li key={task.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><p className="text-sm text-secondary">{task.kind === "recall" ? "Recall" : "Revisão"} · {data.subjects.find((subject) => subject.id === task.subjectId)?.name}</p><p className="mt-1 text-xs text-muted">{data.topics.find((topic) => topic.id === task.topicId)?.title ?? "Conteúdo da última sessão"}{task.dueDate < day.today ? " · atrasado" : " · hoje"}</p></div><Link href={`/estudos?task=${task.id}`} className="text-sm text-accent">{task.kind === "recall" ? "Recuperar de memória" : "Revisar"} →</Link></li>)}</ul>}</section>
-      <section className="flex flex-wrap items-center justify-between gap-4 border-b border-line py-6"><div><h2 className="text-xl font-semibold">Questões</h2><p className="mt-2 text-sm text-muted">{day.questions} realizadas · {day.plannedQuestions} previstas hoje{day.accuracy !== null && ` · ${Math.round(day.accuracy * 100)}% de acerto`}</p></div><Link href="/questoes" className="inline-flex items-center gap-2 text-sm text-accent">Resolver questões<ArrowRight size={16} /></Link></section>
-      <footer className="py-6"><h2 className="text-sm font-semibold">Resumo do dia</h2><dl className="mt-3 flex flex-wrap gap-x-8 gap-y-4 text-sm">{[["Planejado",timeLabel(day.plannedSeconds)],["Tempo líquido",timeLabel(day.executedSeconds)],["Questões",String(day.questions)],["Acertos",day.accuracy === null ? "Sem respostas" : `${day.correct}/${day.questions}`],["Recalls concluídos",String(day.recallsCompleted)]].map(([label,value]) => <div key={label}><dt className="text-xs text-muted">{label}</dt><dd className="mt-1 font-medium">{value}</dd></div>)}</dl></footer>
-      <section className="border-t border-line py-6"><h2 className="text-xl font-semibold">Sua semana</h2><p className="mt-3 text-sm text-secondary">{timeLabel(week.executedSeconds)} estudados de {timeLabel(week.plannedSeconds)} planejados · {week.questions} questões{week.accuracy !== null && ` · ${Math.round(week.accuracy * 100)}% de acerto`}</p><Link href="/analises" className="mt-3 inline-block text-sm text-accent">Desempenho e próximo passo →</Link></section><section className="border-t border-line py-6"><h2 className="text-sm font-semibold">Estude em comunidade</h2><Link href="/comunidade" className="mt-2 inline-block text-sm text-accent">Compartilhar estudo e encontrar seu grupo →</Link></section>
-    </>}
-  </div></AppShell>;
+  const name = (data.profileName.trim() || "Estudante").split(" ")[0];
+
+  function begin(target: PlanBlock) {
+    if (!ready || starting) return;
+    setStarting(true);
+    setFeedback("");
+    try {
+      if (!active) {
+        const startedAt = Date.now();
+        saveActiveStudy(userId, {
+          id: crypto.randomUUID(), subjectId: target.subjectId, topicId: target.topicId,
+          blockId: target.id, taskId: null, durationSeconds: target.minutes * 60,
+          startedAt: new Date(startedAt).toISOString(), runningSince: startedAt, accumulatedSeconds: 0,
+        });
+      }
+      router.push("/estudos");
+    } catch {
+      setFeedback("Não foi possível iniciar.");
+      setStarting(false);
+    }
+  }
+
+  return <AppShell>
+    <div className="mx-auto flex max-w-4xl flex-col gap-4">
+      <header>
+        <h1 className="text-[21px] font-black tracking-[-0.4px]">{greeting}, {name}</h1>
+        <p className="mt-[3px] text-[13px] leading-[18px] text-muted">{data.goal?.title ?? "Defina seu próximo concurso."}</p>
+      </header>
+
+      {priority.daysToExam !== null && <p className="text-sm font-bold text-yellow">
+        {priority.daysToExam >= 0 ? `Faltam ${priority.daysToExam} dias para sua prova` : "A data da prova passou. Atualize seu objetivo quando precisar."}
+      </p>}
+      {feedback && <p role="alert" className="text-sm text-red">{feedback}</p>}
+
+      {!data.goal ? <Link href="/cadastro" className={`${actionClass} bg-blue`}>Configurar objetivo</Link> :
+        <section aria-labelledby="today-focus" className={`${cardClass} border-violet`}>
+          <div className="flex flex-col gap-3">
+            <h2 id="today-focus" className="text-sm font-bold text-cyan">FOCO DE HOJE</h2>
+            {block && subject ? <>
+              <h3 className="text-2xl font-bold">{subject.name}</h3>
+              <p className={textClass}>{topic?.title || block.description || "Estude e registre seu resultado."}</p>
+              <p className={textClass}>{block.minutes} min · {block.plannedQuestions} questões</p>
+              <button disabled={!ready || starting} onClick={() => begin(block)} className={`${actionClass} bg-blue`}>
+                {starting ? "Iniciando…" : active ? "Continuar" : block.done ? "Refazer bloco" : "Começar"}
+              </button>
+            </> : <>
+              <p className={textClass}>Nenhum bloco planejado para hoje</p>
+              <Link href="/plano" className={`${actionClass} bg-blue`}>Criar bloco</Link>
+              <Link href="/estudos" className={ghostClass}>Estudar sem planejamento</Link>
+            </>}
+          </div>
+        </section>}
+
+      {active && <section aria-labelledby="current-session" className={cardClass}>
+        <h2 id="current-session" className="text-sm font-bold text-green">Sessão em andamento</h2>
+        <p className={textClass}>{data.subjects.find(subject => subject.id === active.subjectId)?.name} · {formatClock(elapsedStudy(active, now.getTime()))} · {active.runningSince !== null && elapsedStudy(active, now.getTime()) < active.durationSeconds ? "Estudando" : "Pausada"}</p>
+        <Link href="/estudos" className={`${actionClass} bg-blue`}>Continuar sessão</Link>
+      </section>}
+
+      <section aria-labelledby="pending" className={cardClass}>
+        <h2 id="pending" className="text-sm font-bold">Pendências</h2>
+        <p className={textClass}>{due.filter(task => task.kind === "review").length} revisões · {due.filter(task => task.kind === "recall").length} recalls · {[...latest.values()].filter(correct => !correct).length} questões erradas no objetivo</p>
+        <Link href="/revisoes" className={ghostClass}>Abrir erros e revisões</Link>
+      </section>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <section aria-labelledby="your-day" className={cardClass}>
+          <h2 id="your-day" className="text-sm font-bold text-green">Seu dia</h2>
+          <p className={textClass}>{formatMinutes(daily.executedSeconds)} de {formatMinutes(daily.plannedSeconds)} planejados · {daily.questions} questões · {daily.completedBlocks}/{daily.totalBlocks} blocos</p>
+        </section>
+        <section aria-labelledby="your-week" className={cardClass}>
+          <h2 id="your-week" className="text-sm font-bold text-blue">Sua semana</h2>
+          <p className={textClass}>{formatMinutes(weekly.executedSeconds)} de {formatMinutes(weekly.plannedSeconds)} planejados · {weekly.questions} questões · {weekly.completedBlocks}/{weekly.totalBlocks} blocos</p>
+        </section>
+      </div>
+
+      <section aria-labelledby="recent-performance" className={cardClass}>
+        <h2 id="recent-performance" className="text-sm font-bold">Desempenho recente</h2>
+        <p className={textClass}>{weekly.accuracy === null ? "Registre questões para acompanhar sua taxa de acerto." : `${Math.round(weekly.accuracy * 100)}% de acerto em ${weekly.questions} questões nesta semana.`}</p>
+        {priority.recommendation && <p className={textClass}>Atenção a {priority.recommendation.subject}: {priority.recommendation.reasons.slice(0, 2).join(" ")}</p>}
+        <Link href="/analises" className={ghostClass}>Ver desempenho</Link>
+      </section>
+
+      <section aria-labelledby="community" className={cardClass}>
+        <h2 id="community" className="text-sm font-bold text-pink">Comunidade</h2>
+        <p className={textClass}>Compartilhe sua evolução e converse com quem também está estudando.</p>
+        <Link href="/comunidade" className={ghostClass}>Abrir Comunidade</Link>
+      </section>
+
+      <button disabled={refreshing || !ready} className={ghostClass} onClick={async () => {
+        setRefreshing(true);
+        try {
+          if (mode === "cloud") await refreshStudyData();
+          setNow(new Date());
+        } catch { setFeedback("Não foi possível atualizar seus dados. Tente novamente."); }
+        finally { setRefreshing(false); }
+      }}>{refreshing ? "Atualizando…" : "Atualizar dados"}</button>
+    </div>
+  </AppShell>;
 }

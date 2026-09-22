@@ -50,10 +50,10 @@ export default function PlanosPage() {
                   {plan.features.map((feature) => <li key={feature} className="flex gap-3 text-sm text-secondary"><Check size={17} className="mt-0.5 shrink-0 text-success" />{feature}</li>)}
                 </ul>
 
-                <Link href={mode === "cloud" ? isPro ? "/feedback" : "/dashboard" : "/cadastro"} className={`mt-7 inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-3 text-sm font-semibold ${isPro ? "bg-primary" : "border border-line bg-background-secondary"}`}>
-                  {mode === "cloud" ? isPro ? "Assinar Pro · registrar interesse" : "Continuar estudando" : "Criar conta"} <ArrowRight size={17} />
+                <Link href={mode === "cloud" ? isPro ? "/assinatura" : "/dashboard" : "/cadastro"} className={`mt-7 inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-3 text-sm font-semibold ${isPro ? "bg-primary" : "border border-line bg-background-secondary"}`}>
+                  {mode === "cloud" ? isPro ? "Assinar ou gerenciar Pro" : "Continuar estudando" : "Criar conta"} <ArrowRight size={17} />
                 </Link>
-                {isPro && <p className="mt-3 text-center text-xs text-muted">Assinatura em preparação. Registre seu interesse; não há checkout nem cobrança disponível nesta tela.</p>}
+                {isPro && <p className="mt-3 text-center text-xs text-muted">PIX ou cartão · 15 dias grátis por conta · cancele quando quiser. Pagamentos em Sandbox.</p>}
               </article>
             );
           })}
