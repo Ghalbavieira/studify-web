@@ -1,5 +1,5 @@
 import { asaas, BillingError, type AsaasSubscription } from "@/lib/billing/asaas";
-import { billingAdmin, billingFailure, billingResponse, billingUser } from "@/lib/billing/server";
+import { billingAdmin, billingFailure, billingResponse, billingUser, supabaseFailure } from "@/lib/billing/server";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 export async function POST(request: Request) {
@@ -8,11 +8,11 @@ export async function POST(request: Request) {
     const { user } = await billingUser(request);
     const admin = billingAdmin();
     const { data: reserved, error: reserveError } = await admin.rpc("reserve_billing_operation", { p_user_id: user.id, p_kind: "cancel" });
-    if (reserveError) throw reserveError;
+    if (reserveError) throw supabaseFailure(reserveError, "reserve_cancel");
     if (!reserved) throw new BillingError("Outra operação está em processamento. Atualize o status antes de cancelar.", 409);
     release = async () => { await admin.from("billing_accounts").update({ operation_started_at: null, operation_kind: null }).eq("user_id", user.id).eq("operation_kind", "cancel"); };
     const { data: account, error } = await admin.from("billing_accounts").select("*").eq("user_id", user.id).maybeSingle();
-    if (error) throw error;
+    if (error) throw supabaseFailure(error, "load_account");
     if (!account) return billingResponse({ status: "no_subscription" });
     if (account.cancel_requested_at || ["DELETED", "INACTIVE"].includes(account.subscription_status)) return billingResponse({ status: "cancellation_requested" });
     if (account.subscription_id) {
@@ -25,8 +25,8 @@ export async function POST(request: Request) {
     else return billingResponse({ status: "no_subscription" });
     // This is only an operational marker. Entitlement is changed by the webhook.
     const { error: updateError } = await admin.from("billing_accounts").update({ cancel_requested_at: new Date().toISOString() }).eq("user_id", user.id);
-    if (updateError) throw updateError;
+    if (updateError) throw supabaseFailure(updateError, "save_cancellation");
     return billingResponse({ status: "cancellation_requested" });
-  } catch (error) { return billingFailure(error); }
+  } catch (error) { return billingFailure(error, { operation: "billing.cancel", request }); }
   finally { if (release) await release(); }
 }

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { asaas, asaasConfig, BillingError, hostedUrl, type AsaasList, type AsaasPayment, type AsaasSubscription } from "@/lib/billing/asaas";
-import { billingAdmin, billingFailure, billingResponse, billingUser, siteUrl } from "@/lib/billing/server";
+import { billingAdmin, billingFailure, billingResponse, billingUser, siteUrl, supabaseFailure } from "@/lib/billing/server";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 const input = z.object({ name: z.string().trim().min(3).max(100), cpfCnpj: z.string().transform(v => v.replace(/\D/g, "")).refine(v => [11, 14].includes(v.length)), method: z.enum(["PIX", "CREDIT_CARD"]) });
@@ -15,12 +15,12 @@ export async function POST(request: Request) {
     if ((process.env.ASAAS_WEBHOOK_TOKEN?.length ?? 0) < 32) throw new BillingError("Webhook ainda não configurado no servidor.");
     const admin = billingAdmin();
     const { data: reserved, error: reserveError } = await admin.rpc("reserve_billing_operation", { p_user_id: user.id, p_kind: "checkout" });
-    if (reserveError) throw reserveError;
+    if (reserveError) throw supabaseFailure(reserveError, "reserve_checkout");
     const { data: account, error } = await admin.from("billing_accounts").select("*").eq("user_id", user.id).single();
-    if (error) throw error;
+    if (error) throw supabaseFailure(error, "load_account");
     const save = async (values: Record<string, unknown>) => {
       const { error } = await admin.from("billing_accounts").update(values).eq("user_id", user.id);
-      if (error) throw error;
+      if (error) throw supabaseFailure(error, "save_account");
     };
     const release = () => save({ operation_started_at: null, operation_kind: null });
     if (reserved) releaseKnownFailure = release;
@@ -84,6 +84,6 @@ export async function POST(request: Request) {
     if (error instanceof BillingError && error.status === 422 && releaseKnownFailure) {
       try { await releaseKnownFailure(); } catch { /* Preserve the reservation if the DB is unavailable. */ }
     }
-    return billingFailure(error);
+    return billingFailure(error, { operation: "billing.checkout", request });
   }
 }

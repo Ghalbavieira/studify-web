@@ -7,13 +7,16 @@ async function setup() {
   const db = new PGlite();
   await db.exec(`create role anon; create role authenticated; create role service_role;
     create schema auth; create function auth.uid() returns uuid language sql as $$select '${uid}'::uuid$$;
-    create table public.profiles(id uuid primary key, display_name text, timezone text, data_version integer,
+    create table auth.users(id uuid primary key, raw_user_meta_data jsonb, created_at timestamptz not null);
+    insert into auth.users values('${uid}', '{}', now());
+    create table public.profiles(id uuid primary key, display_name text, timezone text, data_version integer, created_at timestamptz not null default now(),
     plan text, plan_status text, plan_started_at timestamptz, plan_expires_at timestamptz,
     billing_customer_id text, billing_subscription_id text);
     create table public.goals(id uuid primary key, user_id uuid);
     insert into profiles(id,plan,plan_status,plan_started_at,plan_expires_at) values('${uid}','pro','trialing',now(),now()+interval '15 days');`);
   await db.exec(await readFile(new URL('../../supabase/migrations/009_shared_entitlement.sql', import.meta.url), 'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/012_asaas_billing.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/014_billing_profile_backfill.sql', import.meta.url), 'utf8'));
   await db.query(`select reserve_billing_operation($1,'checkout')`, [uid]);
   await db.exec(`update billing_accounts set customer_id='cus_test';`);
   return db;
@@ -42,6 +45,27 @@ test('webhook transaction, duplicate delivery, ordering, cancellation and refund
     assert.equal((await entitlement(db)).plan, 'free');
     await apply(db, event({ id: 'same-time-confirm', at: '2026-09-22T12:00:00Z' }));
     assert.equal((await entitlement(db)).plan, 'free');
+  } finally { await db.close(); }
+});
+
+test('billing migration backfills accounts missing profiles without renewing old trials', async () => {
+  const db = new PGlite();
+  try {
+    await db.exec(`create role anon; create role authenticated; create role service_role;
+      create schema auth; create function auth.uid() returns uuid language sql as $$select '${uid}'::uuid$$;
+      create table auth.users(id uuid primary key, raw_user_meta_data jsonb, created_at timestamptz not null);
+      create table public.profiles(id uuid primary key, display_name text not null default '', timezone text not null default 'America/Sao_Paulo', data_version bigint not null default 0, created_at timestamptz not null default now(), updated_at timestamptz not null default now(), plan text not null default 'free', plan_status text not null default 'active', plan_started_at timestamptz, plan_expires_at timestamptz, billing_customer_id text, billing_subscription_id text);
+      create table public.goals(id uuid primary key, user_id uuid);
+      insert into auth.users values('${uid}', '{}', now() - interval '30 days');`);
+    await db.exec(await readFile(new URL('../../supabase/migrations/009_shared_entitlement.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../../supabase/migrations/012_asaas_billing.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../../supabase/migrations/014_billing_profile_backfill.sql', import.meta.url), 'utf8'));
+    const profile = (await db.query('select plan, plan_status, plan_expires_at from profiles where id=$1', [uid])).rows[0];
+    assert.equal(profile.plan, 'free');
+    assert.equal(profile.plan_status, 'active');
+    assert.equal(profile.plan_expires_at, null);
+    assert.equal((await entitlement(db)).plan, 'free');
+    assert.equal((await db.query(`select reserve_billing_operation($1,'checkout') as ok`, [uid])).rows[0].ok, true);
   } finally { await db.close(); }
 });
 test('trial cannot be renewed; checkout success never grants paid Pro; expiry needs no cron', async () => {

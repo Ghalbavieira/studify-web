@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { asaas, BillingError, type AsaasSubscription } from "@/lib/billing/asaas";
-import { billingAdmin, billingFailure, billingResponse } from "@/lib/billing/server";
+import { billingAdmin, billingFailure, billingResponse, supabaseFailure } from "@/lib/billing/server";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 const resource = z.object({ id: z.string().min(1), customer: z.string().optional(), externalReference: z.string().nullable().optional(), subscription: z.unknown().optional(), status: z.string().optional(), dueDate: z.string().optional(), value: z.number().optional() }).passthrough();
@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     if (!events.has(event.event)) return billingResponse({ ignored: true });
     const admin = billingAdmin();
     const { data: previous, error: previousError } = await admin.from("billing_webhook_events").select("event_id").eq("event_id", event.id).maybeSingle();
-    if (previousError) throw previousError;
+    if (previousError) throw supabaseFailure(previousError, "webhook_deduplication");
     if (previous) return billingResponse({ duplicate: true });
     const isCheckout = event.event.startsWith("CHECKOUT_");
     const isPayment = event.event.startsWith("PAYMENT_");
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     }
     if (!customer) throw new BillingError("Aguardando identificação do cliente.", 503);
     const { data: account, error } = await admin.from("billing_accounts").select("*").eq("customer_id", customer).maybeSingle();
-    if (error) throw error;
+    if (error) throw supabaseFailure(error, "webhook_account");
     if (!account) throw new BillingError("Aguardando cadastro local do cliente.", 503);
     if (object.externalReference && object.externalReference !== account.user_id) return billingResponse({ ignored: true });
     if (subscription?.externalReference && subscription.externalReference !== account.user_id) return billingResponse({ ignored: true });
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     if (["PAYMENT_REFUND_IN_PROGRESS", "PAYMENT_PARTIALLY_REFUNDED"].includes(event.event)) status = "REFUND_REQUESTED";
     if (isPayment && (object.value !== 14.9 || !/^\d{4}-\d{2}-\d{2}$/.test(object.dueDate || "") || !status)) return billingResponse({ ignored: true });
     const { error: applyError } = await admin.rpc("apply_asaas_event", { p_event: { id: event.id, event: event.event, at: at.toISOString(), userId: account.user_id, resourceId: object.id, subscriptionId, status, dueDate: object.dueDate } });
-    if (applyError) throw applyError;
+    if (applyError) throw supabaseFailure(applyError, "webhook_apply");
     return billingResponse({ received: true });
-  } catch (error) { return billingFailure(error); }
+  } catch (error) { return billingFailure(error, { operation: "asaas.webhook", request }); }
 }
