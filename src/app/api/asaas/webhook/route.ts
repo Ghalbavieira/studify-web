@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     if (isPayment && !subscriptionId) return billingResponse({ ignored: true });
     let customer = object.customer;
     let subscription: AsaasSubscription | undefined;
-    if (subscriptionId) {
+    if (subscriptionId && !isPayment) {
       // Validate ownership/product against Asaas, never trust a user_id alone.
       subscription = await asaas<AsaasSubscription>(`/subscriptions/${encodeURIComponent(subscriptionId)}`);
       customer = subscription.customer;
@@ -43,6 +43,14 @@ export async function POST(request: Request) {
     if (!account) throw new BillingError("Aguardando cadastro local do cliente.", 503);
     if (object.externalReference && object.externalReference !== account.user_id) return billingResponse({ ignored: true });
     if (subscription?.externalReference && subscription.externalReference !== account.user_id) return billingResponse({ ignored: true });
+    // Payment deliveries are authenticated by the webhook token and cross-checked
+    // against the customer/subscription already associated locally. Avoid a provider
+    // round-trip here so a transient Asaas read failure cannot block event receipt.
+    if (isPayment && account.subscription_id !== subscriptionId) {
+      const { data: known, error: knownError } = await admin.from("billing_subscriptions").select("subscription_id").eq("subscription_id", subscriptionId).eq("user_id", account.user_id).maybeSingle();
+      if (knownError) throw supabaseFailure(knownError, "webhook_subscription_owner");
+      if (!known) return billingResponse({ ignored: true });
+    }
     if (!isCheckout && !account.subscription_id && !account.checkout_id && account.operation_kind !== "checkout") throw new BillingError("Aguardando associação da assinatura.");
     if (subscription && !subscription.deleted && !subscription.externalReference) {
       // Hosted checkout does not guarantee propagation of its externalReference.
